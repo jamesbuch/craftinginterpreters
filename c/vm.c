@@ -4,6 +4,7 @@
 //< Types of Values include-stdarg
 //> vm-include-stdio
 #include <stdio.h>
+#include <stdlib.h>
 //> Strings vm-include-string
 #include <string.h>
 //< Strings vm-include-string
@@ -31,6 +32,27 @@ static Value clockNative(int argCount, Value* args) {
   return NUMBER_VAL((double)clock() / CLOCKS_PER_SEC);
 }
 //< Calls and Functions clock-native
+static Value getcNative(int argCount, Value* args) {
+  int res = getchar();
+  if (res == EOF) res = -1;
+  return NUMBER_VAL((double)res);
+}
+static Value chrNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+  char *s = ALLOCATE(char, 2);
+  s[0] = (char) AS_NUMBER(args[0]);
+  s[1] = '\0';
+  return OBJ_VAL(takeString(s, 1));
+}
+static Value exitNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_NUMBER(args[0])) return NIL_VAL;
+  exit((int) AS_NUMBER(args[0]));
+}
+static Value printErrorNative(int argCount, Value* args) {
+  if (argCount != 1 || !IS_STRING(args[0])) return NIL_VAL;
+  fprintf(stderr, "%s\n", AS_CSTRING(args[0]));
+  return NIL_VAL;
+}
 //> reset-stack
 static void resetStack() {
   vm.stackTop = vm.stack;
@@ -129,6 +151,10 @@ void initVM() {
 //> Calls and Functions define-native-clock
 
   defineNative("clock", clockNative);
+  defineNative("getc", getcNative);
+  defineNative("chr", chrNative);
+  defineNative("exit", exitNative);
+  defineNative("print_error", printErrorNative);
 //< Calls and Functions define-native-clock
 }
 
@@ -418,7 +444,9 @@ static InterpretResult run() {
 */
 //> Closures read-constant
 #define READ_CONSTANT() \
-    (frame->closure->function->chunk.constants.values[READ_BYTE()])
+    (frame->closure->function->chunk.constants.values[ \
+      *frame->ip & 0x80 ? READ_SHORT() & 0x7fff : READ_BYTE() \
+    ])
 //< Closures read-constant
 
 //< Calls and Functions run

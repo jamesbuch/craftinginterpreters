@@ -16,27 +16,34 @@ void disassembleChunk(Chunk* chunk, const char* name) {
     offset = disassembleInstruction(chunk, offset);
   }
 }
+static int readConstantIndex(Chunk *chunk, int *offset) {
+  int constant = chunk->code[(*offset)++];
+  if (!(constant & 0x80)) return constant;
+  return (constant & 0x7f) << 8 | chunk->code[(*offset)++];
+}
 //> constant-instruction
 static int constantInstruction(const char* name, Chunk* chunk,
                                int offset) {
-  uint8_t constant = chunk->code[offset + 1];
+  int newOffset = offset + 1;
+  int constant = readConstantIndex(chunk, &newOffset);
   printf("%-16s %4d '", name, constant);
   printValue(chunk->constants.values[constant]);
   printf("'\n");
 //> return-after-operand
-  return offset + 2;
+  return newOffset;
 //< return-after-operand
 }
 //< constant-instruction
 //> Methods and Initializers invoke-instruction
 static int invokeInstruction(const char* name, Chunk* chunk,
                                 int offset) {
-  uint8_t constant = chunk->code[offset + 1];
-  uint8_t argCount = chunk->code[offset + 2];
+  int argOffset = offset + 1;
+  int constant = readConstantIndex(chunk, &argOffset);
+  uint8_t argCount = chunk->code[argOffset];
   printf("%-16s (%d args) %4d '", name, argCount, constant);
   printValue(chunk->constants.values[constant]);
   printf("'\n");
-  return offset + 3;
+  return argOffset + 1;
 }
 //< Methods and Initializers invoke-instruction
 //> simple-instruction
@@ -183,7 +190,7 @@ int disassembleInstruction(Chunk* chunk, int offset) {
 //> Closures disassemble-closure
     case OP_CLOSURE: {
       offset++;
-      uint8_t constant = chunk->code[offset++];
+      int constant = readConstantIndex(chunk, &offset);
       printf("%-16s %4d ", "OP_CLOSURE", constant);
       printValue(chunk->constants.values[constant]);
       printf("\n");

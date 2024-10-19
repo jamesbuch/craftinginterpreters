@@ -262,19 +262,24 @@ static void emitReturn() {
 }
 //< Compiling Expressions emit-return
 //> Compiling Expressions make-constant
-static uint8_t makeConstant(Value value) {
+static int makeConstant(Value value) {
   int constant = addConstant(currentChunk(), value);
-  if (constant > UINT8_MAX) {
+  if (constant > 0x7fff) {
     error("Too many constants in one chunk.");
     return 0;
   }
 
-  return (uint8_t)constant;
+  return constant;
 }
 //< Compiling Expressions make-constant
+static void emitConstantIndex(int index) {
+  if (index < 0x80) emitByte(index);
+  else emitBytes(index >> 8 | 0x80, index & 0xff);
+}
 //> Compiling Expressions emit-constant
 static void emitConstant(Value value) {
-  emitBytes(OP_CONSTANT, makeConstant(value));
+  emitByte(OP_CONSTANT);
+  emitConstantIndex(makeConstant(value));
 }
 //< Compiling Expressions emit-constant
 //> Jumping Back and Forth patch-jump
@@ -411,7 +416,7 @@ static void parsePrecedence(Precedence precedence);
 
 //< Compiling Expressions forward-declarations
 //> Global Variables identifier-constant
-static uint8_t identifierConstant(Token* name) {
+static int identifierConstant(Token* name) {
   return makeConstant(OBJ_VAL(copyString(name->start,
                                          name->length)));
 }
@@ -531,7 +536,7 @@ static void declareVariable() {
 }
 //< Local Variables declare-variable
 //> Global Variables parse-variable
-static uint8_t parseVariable(const char* errorMessage) {
+static int parseVariable(const char* errorMessage) {
   consume(TOKEN_IDENTIFIER, errorMessage);
 //> Local Variables parse-local
 
@@ -552,7 +557,7 @@ static void markInitialized() {
 }
 //< Local Variables mark-initialized
 //> Global Variables define-variable
-static void defineVariable(uint8_t global) {
+static void defineVariable(int global) {
 //> Local Variables define-variable
   if (current->scopeDepth > 0) {
 //> define-local
@@ -562,7 +567,8 @@ static void defineVariable(uint8_t global) {
   }
 
 //< Local Variables define-variable
-  emitBytes(OP_DEFINE_GLOBAL, global);
+  emitByte(OP_DEFINE_GLOBAL);
+  emitConstantIndex(global);
 }
 //< Global Variables define-variable
 //> Calls and Functions argument-list
@@ -630,19 +636,22 @@ static void call(bool canAssign) {
 //> Classes and Instances compile-dot
 static void dot(bool canAssign) {
   consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
-  uint8_t name = identifierConstant(&parser.previous);
+  int name = identifierConstant(&parser.previous);
 
   if (canAssign && match(TOKEN_EQUAL)) {
     expression();
-    emitBytes(OP_SET_PROPERTY, name);
+    emitByte(OP_SET_PROPERTY);
+    emitConstantIndex(name);
 //> Methods and Initializers parse-call
   } else if (match(TOKEN_LEFT_PAREN)) {
     uint8_t argCount = argumentList();
-    emitBytes(OP_INVOKE, name);
+    emitByte(OP_INVOKE);
+    emitConstantIndex(name);
     emitByte(argCount);
 //< Methods and Initializers parse-call
   } else {
-    emitBytes(OP_GET_PROPERTY, name);
+    emitByte(OP_GET_PROPERTY);
+    emitConstantIndex(name);
   }
 }
 //< Classes and Instances compile-dot
@@ -754,14 +763,18 @@ static void namedVariable(Token name, bool canAssign) {
     emitBytes(OP_SET_GLOBAL, arg);
 */
 //> Local Variables emit-set
-    emitBytes(setOp, (uint8_t)arg);
+    emitByte(setOp);
+    if (setOp == OP_SET_GLOBAL) emitConstantIndex(arg);
+    else emitByte(arg);
 //< Local Variables emit-set
   } else {
 /* Global Variables named-variable < Local Variables emit-get
     emitBytes(OP_GET_GLOBAL, arg);
 */
 //> Local Variables emit-get
-    emitBytes(getOp, (uint8_t)arg);
+    emitByte(getOp);
+    if (getOp == OP_GET_GLOBAL) emitConstantIndex(arg);
+    else emitByte(arg);
 //< Local Variables emit-get
   }
 //< named-variable
@@ -797,7 +810,7 @@ static void super_(bool canAssign) {
 //< super-errors
   consume(TOKEN_DOT, "Expect '.' after 'super'.");
   consume(TOKEN_IDENTIFIER, "Expect superclass method name.");
-  uint8_t name = identifierConstant(&parser.previous);
+  int name = identifierConstant(&parser.previous);
 //> super-get
   
   namedVariable(syntheticToken("this"), false);
@@ -810,11 +823,13 @@ static void super_(bool canAssign) {
   if (match(TOKEN_LEFT_PAREN)) {
     uint8_t argCount = argumentList();
     namedVariable(syntheticToken("super"), false);
-    emitBytes(OP_SUPER_INVOKE, name);
+    emitByte(OP_SUPER_INVOKE);
+    emitConstantIndex(name);
     emitByte(argCount);
   } else {
     namedVariable(syntheticToken("super"), false);
-    emitBytes(OP_GET_SUPER, name);
+    emitByte(OP_GET_SUPER);
+    emitConstantIndex(name);
   }
 //< super-invoke
 }
@@ -1056,7 +1071,7 @@ static void function(FunctionType type) {
       if (current->function->arity > 255) {
         errorAtCurrent("Can't have more than 255 parameters.");
       }
-      uint8_t constant = parseVariable("Expect parameter name.");
+      int constant = parseVariable("Expect parameter name.");
       defineVariable(constant);
     } while (match(TOKEN_COMMA));
   }
@@ -1070,7 +1085,8 @@ static void function(FunctionType type) {
   emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
 */
 //> Closures emit-closure
-  emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
+  emitByte(OP_CLOSURE);
+  emitConstantIndex(makeConstant(OBJ_VAL(function)));
 //< Closures emit-closure
 //> Closures capture-upvalues
 
@@ -1084,7 +1100,7 @@ static void function(FunctionType type) {
 //> Methods and Initializers method
 static void method() {
   consume(TOKEN_IDENTIFIER, "Expect method name.");
-  uint8_t constant = identifierConstant(&parser.previous);
+  int constant = identifierConstant(&parser.previous);
 //> method-body
 
 //< method-body
@@ -1104,7 +1120,8 @@ static void method() {
 //> method-body
   function(type);
 //< method-body
-  emitBytes(OP_METHOD, constant);
+  emitByte(OP_METHOD);
+  emitConstantIndex(constant);
 }
 //< Methods and Initializers method
 //> Classes and Instances class-declaration
@@ -1113,10 +1130,11 @@ static void classDeclaration() {
 //> Methods and Initializers class-name
   Token className = parser.previous;
 //< Methods and Initializers class-name
-  uint8_t nameConstant = identifierConstant(&parser.previous);
+  int nameConstant = identifierConstant(&parser.previous);
   declareVariable();
 
-  emitBytes(OP_CLASS, nameConstant);
+  emitByte(OP_CLASS);
+  emitConstantIndex(nameConstant);
   defineVariable(nameConstant);
 
 //> Methods and Initializers create-class-compiler
@@ -1180,7 +1198,7 @@ static void classDeclaration() {
 //< Classes and Instances class-declaration
 //> Calls and Functions fun-declaration
 static void funDeclaration() {
-  uint8_t global = parseVariable("Expect function name.");
+  int global = parseVariable("Expect function name.");
   markInitialized();
   function(TYPE_FUNCTION);
   defineVariable(global);
@@ -1188,7 +1206,7 @@ static void funDeclaration() {
 //< Calls and Functions fun-declaration
 //> Global Variables var-declaration
 static void varDeclaration() {
-  uint8_t global = parseVariable("Expect variable name.");
+  int global = parseVariable("Expect variable name.");
 
   if (match(TOKEN_EQUAL)) {
     expression();
